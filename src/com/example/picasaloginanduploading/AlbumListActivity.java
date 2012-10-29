@@ -1,16 +1,32 @@
 package com.example.picasaloginanduploading;
 
+import java.io.Closeable;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.SocketTimeoutException;
+import java.net.URL;
+
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Dialog;
 import android.app.ProgressDialog;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Message;
+import android.support.v4.util.LruCache;
 import android.text.TextUtils;
+import android.util.Log;
+import android.util.SparseArray;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.View;
@@ -18,6 +34,7 @@ import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemClickListener;
 import android.widget.BaseAdapter;
+import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -98,6 +115,9 @@ public class AlbumListActivity extends Activity {
     	if (mWorker != null) {
     		mWorker.quit();
     	}
+    	if (mAdapter != null) {
+    		mAdapter.stop();
+    	}
     }
 
     @Override
@@ -148,16 +168,68 @@ public class AlbumListActivity extends Activity {
     
     public class AlbumAdapter extends BaseAdapter implements OnItemClickListener {
 
+    	private static final int MSG_UPDATE = 0;
     	private AlbumEntry[] mEntries;
     	private LayoutInflater mInflater;
     	private Context mContext;
+    	private SparseArray<View> mViewCache;
+    	private SparseArray<Bitmap> mBitmapCache;
+    	private DownloadThread mDownloadThread;
+    	
+    	private Handler mHandler = new Handler() {
+
+    		@Override
+    		public void handleMessage(Message msg) {
+    			if (msg.what == MSG_UPDATE) {
+    				int pos = msg.arg1;
+    				Bitmap b = (Bitmap) msg.obj;
+    				if (mAdapter != null) {
+    					mAdapter.update(pos, b);
+    				}
+    			} 
+    		}
+    		
+    	};
     	
     	public AlbumAdapter(Context context, AlbumEntry[] entry) {
     		mContext = context;
     		mEntries = entry;
     		mInflater = LayoutInflater.from(context);
+    		mViewCache = new SparseArray<View>();
+    		mBitmapCache = new SparseArray<Bitmap>();
+    		mDownloadThread = new DownloadThread();
+    		mDownloadThread.start();
     	}
 
+    	public void update(int pos, Bitmap b) {
+    		View view;
+    		synchronized (mViewCache) {
+    			view = mViewCache.get(pos, null);
+			}
+    		if (view != null) {
+    			ImageView imageView = (ImageView) view.findViewById(R.id.icon);
+    			imageView.setImageBitmap(b);
+    			imageView.invalidate();
+    		}
+    	}
+    	
+    	public void stop() {
+    		if (mDownloadThread != null) {
+    			mDownloadThread.stopThread();
+    		}
+    		if (mViewCache != null) {
+    			mViewCache.clear();
+    		}
+    		if (mBitmapCache != null) {
+    			for (int i = 0; i < mBitmapCache.size(); i++) {
+    				Bitmap b = mBitmapCache.get(i);
+    				if (b != null) {
+    					b.recycle();
+    				}
+				}
+    		}
+    	}
+    	
 		@Override
 		public int getCount() {
 			return (mEntries != null) ? mEntries.length : 0;
@@ -172,11 +244,37 @@ public class AlbumListActivity extends Activity {
 		public long getItemId(int pos) {
 			return pos;
 		}
+		
+		private View getViewFromCache(int position) {
+			synchronized (mViewCache) {
+				return mViewCache.get(position);
+			}
+		}
+		
+		private void putViewToCache(int position, View v) {
+			synchronized (mViewCache) {
+				mViewCache.put(position, v);
+			}
+		}
+		
+		private Bitmap getBitmapFromCache(int position) {
+			synchronized (mBitmapCache) {
+				return mBitmapCache.get(position);
+			}
+		}
+		
+		private void putBitmapToCache(int position, Bitmap b) {
+			synchronized (mBitmapCache) {
+				mBitmapCache.put(position, b);
+			}
+		}
 
 		@Override
 		public View getView(int pos, View v, ViewGroup parent) {
+			v = getViewFromCache(pos);
 			if (v == null) {
 				v = mInflater.inflate(R.layout.album_list_item, null);
+				putViewToCache(pos, v);
 			}
 			
 			AlbumEntry ent = mEntries[pos];
@@ -196,6 +294,14 @@ public class AlbumListActivity extends Activity {
 				if (count != null) {
 					count.setText(String.valueOf(ent.mNumPhotos));
 				}
+				
+				ImageView image = (ImageView) v.findViewById(R.id.icon);
+				if (image != null) {
+					Bitmap b = getBitmapFromCache(pos);
+					if (b != null && !b.isRecycled()) {
+						image.setImageBitmap(b);
+					}
+				}
 			}
 			return v;
 		}
@@ -208,6 +314,111 @@ public class AlbumListActivity extends Activity {
 			intent.putExtra("albumid", albumId);
 			startActivity(intent);
 		}
-    	
+    
+		class DownloadThread extends Thread {
+			
+			private boolean mDone;
+			
+			public DownloadThread() {
+				super("download_thread");
+			}
+			
+			public void stopThread() {
+				mDone = true;
+			}
+			
+			public void run() {
+				android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
+				int index = 0;
+				int length = mEntries.length;
+				System.out.println("entry length " + length);
+				while (!mDone && index < length) {
+					System.out.println("index " + index);
+					AlbumEntry entry = mEntries[index];
+					String path = Environment.getExternalStorageDirectory().getPath() + File.separator + "my_download" + File.separator + entry.mAlbumId;
+					if (new File(path).exists()) {
+						putBitmapToCacheAndPostBack(index, path);
+					} else {
+						if (download(entry.mThumbUrl, path)) {
+							putBitmapToCacheAndPostBack(index, path);
+						}
+					}
+					index++;
+				}
+			}
+			
+			
+			private void putBitmapToCacheAndPostBack(int pos, String path) {
+				Bitmap b = BitmapFactory.decodeFile(path);
+				putBitmapToCache(pos, b);
+				Message.obtain(mHandler, MSG_UPDATE, pos, 0, b).sendToTarget();
+			}
+			
+			private boolean download(String downloadURL, String path) {
+				boolean success = false;
+				if (downloadURL == null || path == null)
+					return success;
+				InputStream in = null;
+				FileOutputStream out = null;
+				HttpURLConnection conn = null;
+				try {
+					File file = new File(path);
+					if (file.exists()) {
+						Log.v(getClass().getName(), "file " + path + " already exists");
+						success = true;
+						return success;
+					}
+					File parent = file.getParentFile();
+					if (!parent.exists()) {
+						Log.w(getClass().getName(), "download parent dir doesn't exist " + parent.toString());
+						parent.mkdirs();
+					}
+					URL url = new URL(downloadURL);
+					conn = (HttpURLConnection) url.openConnection();
+					conn.setConnectTimeout(10000);
+					conn.connect();
+					@SuppressWarnings("unused")
+					int contentLength = conn.getContentLength();
+					in = conn.getInputStream();
+					out = new FileOutputStream(file);
+					
+					byte[] buffer = new byte[1024];
+					int len;
+//					long total = 0;
+					while ((len = in.read(buffer)) > 0) {
+						out.write(buffer, 0, len);
+//						total += len;
+					}
+					return true;
+				} catch (MalformedURLException e) {
+					Log.e(getClass().getName(), "parse URL occur error", e);
+				} catch (SocketTimeoutException e) {
+					Log.e(getClass().getName(), "Connection Timeout error", e);
+				} catch (IOException e) {
+					Log.e(getClass().getName(), "IO error", e);
+				} finally {
+					closeStream(in);
+					closeStream(out);
+					if (conn != null) {
+						conn.disconnect();
+					}
+				}
+				return false;
+			}
+			
+			public void closeStream(Closeable out) {
+				if (out != null) {
+					try {
+						out.close();
+					} catch (IOException e) {
+						e.printStackTrace();
+					}
+				}
+			}
+			
+	    }
+		
     }
+    
+    
 }
