@@ -1,0 +1,11 @@
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/menu_login"
+        android:title="@string/menu_login"
+        android:orderInCategory="1"
+        android:showAsAction="never" />
+    
+     <item android:id="@+id/menu_albumlist"
+        android:title="@string/menu_albumlist"
+        android:orderInCategory="2"
+        android:showAsAction="never" />
+</menu>

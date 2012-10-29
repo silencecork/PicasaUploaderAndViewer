@@ -1,0 +1,25 @@
+<resources>
+
+    <string name="app_name">PicasaClientLoginAndUploading</string>
+    <string name="hello_world">Hello world!</string>
+    <string name="menu_login">Login</string>
+    <string name="title_activity_main">PicasaClientLogin</string>
+    <string name="login_activity_main">Login Picasa</string>
+    <string name="error_service_not_available">Service occurs error now, please try again later</string>
+    <string name="msg_load_wait">Loading, please wait\u2026</string>
+    <string name="alert_title_warning">Warning</string>
+    <string name="alert_msg_picasa_not_activae">Your Picasa account may not be activated, you need to log into Picasa web album to activated.</string>
+    <string name="btn_ok">OK</string>
+    <string name="btn_go_picasa">Go to Picasa</string>
+    <string name="btn_uploading_photo">Choose photo to upload</string>
+    <string name="no_token">There is no token, please Login first</string>
+    <string name="download_user_info">Downloading user information</string>
+    <string name="menu_settings">Settings</string>
+    <string name="menu_albumlist">Album List</string>
+    <string name="title_activity_login">LoginPicasa</string>
+    <string name="username">User Name</string>
+    <string name="password">Password</string>
+    <string name="title_activity_album_list">AlbumListActivity</string>
+    <string name="title_activity_photo_list">PhotoListActivity</string>
+
+</resources>
